@@ -1,69 +1,51 @@
 import sys
-import requests
 import os
-from PyPDF2 import PdfReader
+from supabase import create_client
+import tempfile
+from langchain_community.document_loaders import PyPDFLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores import FAISS
-from langchain.embeddings import OpenAIEmbeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from dotenv import load_dotenv
 
-def download_pdf(file_url, save_path):
-    try:
-        response = requests.get(file_url, stream=True)
-        response.raise_for_status()
-        with open(save_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print(f"PDF downloaded successfully to {save_path}")
-    except Exception as e:
-        print(f"Error downloading PDF: {e}")
-        sys.exit(1)
+load_dotenv()
 
-def extract_text_from_pdf(pdf_path):
-    try:
-        reader = PdfReader(pdf_path)
-        text = ""
-        for page in reader.pages:
-            text += page.extract_text() or ""
-        return text
-    except Exception as e:
-        print(f"Error reading PDF: {e}")
-        sys.exit(1)
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET")
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python index_faiss.py <pdf_url>")
-        sys.exit(1)
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    pdf_url = sys.argv[1]
-    temp_pdf_path = "temp_download.pdf"
+def download_pdf(file_name):
+    """Download the uploaded PDF from Supabase Storage."""
+    response = supabase.storage.from_(SUPABASE_BUCKET).download(file_name)
+    if isinstance(response, bytes):
+        temp_path = os.path.join(tempfile.gettempdir(), file_name)
+        with open(temp_path, "wb") as f:
+            f.write(response)
+        return temp_path
+    else:
+        raise Exception(f"Failed to download {file_name}: {response}")
 
-    # Step 1: Download PDF
-    download_pdf(pdf_url, temp_pdf_path)
+def build_faiss_index(pdf_path):
+    """Load PDF, split text, and store FAISS index."""
+    loader = PyPDFLoader(pdf_path)
+    documents = loader.load()
 
-    # Step 2: Extract text
-    text = extract_text_from_pdf(temp_pdf_path)
-
-    if not text.strip():
-        print("No text found in PDF.")
-        sys.exit(1)
-
-    # Step 3: Split text into chunks
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    docs = text_splitter.create_documents([text])
+    texts = text_splitter.split_documents(documents)
 
-    # Step 4: Create embeddings and FAISS index
-    try:
-        embeddings = OpenAIEmbeddings()
-        vectorstore = FAISS.from_documents(docs, embeddings)
-        vectorstore.save_local("faiss_index")
-        print("FAISS index created and saved successfully.")
-    except Exception as e:
-        print(f"Error creating FAISS index: {e}")
-        sys.exit(1)
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    db = FAISS.from_documents(texts, embeddings)
 
-    # Step 5: Clean up temp file
-    if os.path.exists(temp_pdf_path):
-        os.remove(temp_pdf_path)
+    db.save_local("projects/faiss_index")
+    print("FAISS index saved successfully")
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        print("Usage: python index_faiss.py <file_name_in_supabase>")
+        sys.exit(1)
+
+    file_name = sys.argv[1]
+    pdf_path = download_pdf(file_name)
+    build_faiss_index(pdf_path)
