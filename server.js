@@ -14,7 +14,7 @@ app.use(express.json());
 app.use(fileUpload());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Upload PDF and index it
+// Upload PDF to Supabase and index it
 app.post('/upload', async (req, res) => {
   try {
     if (!req.files || !req.files.file) {
@@ -22,18 +22,35 @@ app.post('/upload', async (req, res) => {
     }
 
     const file = req.files.file;
-    const uploadPath = path.join(__dirname, 'uploads', file.name);
+    const bucketName = 'pdf-bucket'; // Change to your Supabase bucket name
+    const filePath = `uploads/${Date.now()}_${file.name}`;
 
-    await file.mv(uploadPath);
-    console.log(`Uploaded: ${file.name}`);
+    // Upload file to Supabase
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, file.data, { contentType: file.mimetype });
 
-    const command = `python3 projects/index_faiss.py "${uploadPath}"`;
+    if (error) {
+      console.error('Supabase upload error:', error.message);
+      return res.status(500).json({ error: 'File upload to Supabase failed' });
+    }
+
+    // Get the public URL
+    const { data: publicUrlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filePath);
+
+    const fileUrl = publicUrlData.publicUrl;
+    console.log(`File uploaded to Supabase: ${fileUrl}`);
+
+    // Run Python indexing script with the file URL
+    const command = `python3 projects/index_faiss.py "${fileUrl}"`;
     exec(command, (err, stdout, stderr) => {
       if (err) {
         console.error('Error while building vector store:', stderr);
         return res.status(500).json({ error: 'Vector store creation failed' });
       }
-      return res.json({ message: 'Upload and indexing complete' });
+      return res.json({ message: 'Upload and indexing complete', fileUrl });
     });
   } catch (error) {
     console.error('Upload error:', error);
