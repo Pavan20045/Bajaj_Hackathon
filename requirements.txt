@@ -1,4 +1,6 @@
+langchain
+langchain-community
+pypdf
 faiss-cpu
-pymupdf
-google-generativeai
 supabase
+python-dotenv
