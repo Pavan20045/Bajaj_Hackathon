@@ -1,55 +1,30 @@
 import sys
-from langchain.vectorstores import FAISS
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.prompts import PromptTemplate
-from langchain.chains import RetrievalQA
-from langchain.chat_models import ChatOpenAI
+import os
+from langchain_community.vectorstores import FAISS
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain.chains import ConversationalRetrievalChain
+from dotenv import load_dotenv
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: python run_gemini.py <query>")
-        sys.exit(1)
+load_dotenv()
 
-    query = sys.argv[1]
+def load_faiss_index():
+    embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
+    return FAISS.load_local("projects/faiss_index", embeddings, allow_dangerous_deserialization=True)
 
-    # Step 1: Load FAISS index
-    try:
-        embeddings = OpenAIEmbeddings()
-        vectorstore = FAISS.load_local("faiss_index", embeddings, allow_dangerous_deserialization=True)
-    except Exception as e:
-        print(f"Error loading FAISS index: {e}")
-        sys.exit(1)
+def answer_question(query):
+    db = load_faiss_index()
+    retriever = db.as_retriever(search_kwargs={"k": 3})
 
-    # Step 2: Set up QA chain
-    llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
-    retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    llm = ChatGoogleGenerativeAI(model="gemini-pro", temperature=0)
+    qa_chain = ConversationalRetrievalChain.from_llm(llm, retriever)
 
-    prompt_template = """
-    You are an AI assistant. Use the following context to answer the question accurately.
-
-    Context: {context}
-    Question: {question}
-    Answer:
-    """
-    prompt = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
-
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=retriever,
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": prompt}
-    )
-
-    # Step 3: Run the query
-    try:
-        result = qa_chain({"query": query})
-        print("Answer:", result["result"])
-        print("\nSources:")
-        for doc in result["source_documents"]:
-            print("-", doc.metadata)
-    except Exception as e:
-        print(f"Error running QA chain: {e}")
-        sys.exit(1)
+    response = qa_chain({"question": query, "chat_history": []})
+    return response["answer"]
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        print("Usage: python run_gemini.py <question>")
+        sys.exit(1)
+
+    question = sys.argv[1]
+    print(answer_question(question))
