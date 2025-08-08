@@ -14,7 +14,7 @@ app.use(express.json());
 app.use(fileUpload());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Upload PDF to Supabase and index it
+// Upload PDF and index it
 app.post('/upload', async (req, res) => {
   try {
     if (!req.files || !req.files.file) {
@@ -22,39 +22,36 @@ app.post('/upload', async (req, res) => {
     }
 
     const file = req.files.file;
-    const bucketName = 'pdf-bucket'; // Change to your Supabase bucket name
-    const filePath = `uploads/${Date.now()}_${file.name}`;
+    const fileName = `${Date.now()}_${file.name}`;
 
-    // Upload file to Supabase
+    console.log(`Uploading ${fileName} to Supabase bucket: ${process.env.SUPABASE_BUCKET}`);
+
+    // Upload to Supabase Storage
     const { data, error } = await supabase.storage
-      .from(bucketName)
-      .upload(filePath, file.data, { contentType: file.mimetype });
+      .from(process.env.SUPABASE_BUCKET)
+      .upload(fileName, file.data, {
+        contentType: file.mimetype
+      });
 
     if (error) {
-      console.error('Supabase upload error:', error.message);
-      return res.status(500).json({ error: 'File upload to Supabase failed' });
+      console.error('Supabase upload error:', error); // FULL error in Render logs
+      return res.status(500).json({ error: error.message });
     }
 
-    // Get the public URL
-    const { data: publicUrlData } = supabase.storage
-      .from(bucketName)
-      .getPublicUrl(filePath);
+    console.log('File uploaded successfully:', data);
 
-    const fileUrl = publicUrlData.publicUrl;
-    console.log(`File uploaded to Supabase: ${fileUrl}`);
-
-    // Run Python indexing script with the file URL
-    const command = `python3 projects/index_faiss.py "${fileUrl}"`;
+    // After upload, run indexing
+    const command = `python3 projects/index_faiss.py "${fileName}"`;
     exec(command, (err, stdout, stderr) => {
       if (err) {
         console.error('Error while building vector store:', stderr);
         return res.status(500).json({ error: 'Vector store creation failed' });
       }
-      return res.json({ message: 'Upload and indexing complete', fileUrl });
+      return res.json({ message: 'Upload and indexing complete', file: data });
     });
   } catch (error) {
     console.error('Upload error:', error);
-    return res.status(500).json({ error: 'Upload failed' });
+    return res.status(500).json({ error: error.message });
   }
 });
 
