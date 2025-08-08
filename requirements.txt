@@ -1,0 +1,4 @@
+faiss-cpu
+pymupdf
+google-generativeai
+supabase
